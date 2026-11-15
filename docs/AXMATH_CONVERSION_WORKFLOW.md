@@ -2,7 +2,7 @@
 
 此文件保留原主 Skill 中的全部公式转换安全约束、预检、断点、异常分派及最终验收细节。
 入口和执行优先级以 ../SKILL.md 为准。数学资料编号请先读 NUMBERING_AND_OUTLINE.md，内容排版见 MATH_LAYOUT_REFERENCE.md。
-本文件只在需要转换 OfficeMath/OMML → AxMath 时加载；纯文字排版不用加载。
+本文件在需要转换或创建 AxMath 时加载；正文单字母、数字的具体步骤见 [BODY_SINGLE_CHARACTER_MATH.md](BODY_SINGLE_CHARACTER_MATH.md)。纯文字排版不用加载。
 
 ## 永久安全约束
 
@@ -16,13 +16,13 @@
 
 ### 首轮生成硬规则（强制）
 
-**所有规则在第一次写入新 DOCX 时执行。不要先按旧方式生成，再等终稿审计发现错误后补救。**
+**先确认全部来源目标和样页，再按目标生成。不要先只跑一键转换，再等终稿审计发现正文数学字符漏转。**
 
-#### 0. 冻结源稿并处理正文标点
+#### 0. 冻结源稿与正文标点
 
 - 原 PDF/DOCX 永不覆盖。MinerU 输出先保存为 mineru_original.docx；已有 DOCX 也先保留原件。
-- 用下面的专用脚本生成新的 frozen_source.docx。它只处理主文档正文普通 w:t 文本节点中的中文句号，不进入 AxMath OLE、OfficeMath、图片/图表、字段、文本框或页眉页脚；并验证 DOCX 中除 word/document.xml 外的其他包部件全部保持原样。
-- 报告必须记录替换数量，且普通正文残留数为 0。禁止用 Word 全局查找替换或直接修改 OLE 内部。
+- 默认无覆盖复制一份 frozen_source.docx，保留来源标点。只有用户本次明确要求把正文中文句号改为英文句点时，才改用下面的专用脚本生成冻结副本。它只处理主文档正文普通 w:t 文本节点中的中文句号，不进入 AxMath OLE、OfficeMath、图片/图表、字段、文本框或页眉页脚；并验证 DOCX 中除 word/document.xml 外的其他包部件全部保持原样。
+- 执行标点转换时报告必须记录替换数量，且普通正文残留数为 0。禁止用 Word 全局查找替换或直接修改 OLE 内部。
 
     python scripts\normalize_body_punctuation.py --source "mineru_original.docx" --output "frozen_source.docx" --report "review\BODY_PUNCTUATION.json"
 
@@ -40,18 +40,19 @@ frozen_source.docx 是后续所有预检、公式目标清单和转换的唯一�
 
 生成前必须创建哈希绑定的 SOURCE_FINAL_FORMULA_MAP.json 模板：
 
-    python scripts\math_layout_contract.py map-template --source "<READY_FOR_GPT_REVIEW.json 中的 frozen_source 绝对路径>" --out "<final-review>\SOURCE_FINAL_FORMULA_MAP.json"
+    python scripts\math_layout_contract.py map-template --source "<预先冻结的 frozen_source.docx 绝对路径>" --out "<final-review>\SOURCE_FINAL_FORMULA_MAP.json"
 
-必须使用 READY_FOR_GPT_REVIEW.json 记录的实际 frozen_source 路径和哈希；后续转换、内部导出和最终比较始终引用同一冻结来源。模板会为来源中的每个 OfficeMath/AxMath 对象建立 source_formula 目标；每个目标都必须在生成前从冻结来源填写 source_anchor 和 expected_tex，禁止从终稿导出反推。随后必须补齐两类目标：
+`--inspect-only` 不创建 READY；建图时使用已经冻结的输入路径。正式转换会创建一份额外的冻结副本：单份文档读取 READY 的 `documents[0].frozen_source` 和 `documents[0].frozen_source_sha256`，与建图输入核对哈希一致。诊断使用 READY 的副本；最终映射和比较继续使用映射中记录的原冻结路径与同一哈希，不能把两个不同路径当成同一路径。模板会为来源中的每个 OfficeMath/AxMath 对象建立 source_formula 目标；每个目标都必须在生成前从冻结来源填写 source_anchor 和 expected_tex，禁止从终稿导出反推。随后必须补齐两类目标：
 
 - source_formula_visual：PDF/扫描图中的源公式未以 OMML/AxMath 对象存在时，按 PDF 页码和区域建立目标，并填写源式 expected_tex。
-- added_body_math：正文中独立变量、表达式等虽不是源公式对象，但按本任务要求应生成 AxMath OLE 时建立目标，并填写其来源文字锚点和 expected_tex。
+- added_body_math：正文中应生成 AxMath 的独立字母、数字及表达式逐次建立目标，填写来源锚点、准确 `source_text` 和 `expected_tex`。必须逐题识别；模板只列示例，不会自动发现这些目标。分类、计划与操作见 [BODY_SINGLE_CHARACTER_MATH.md](BODY_SINGLE_CHARACTER_MATH.md)。
 
 目标清单必须在首次生成公式前冻结。不得等到终稿发现多出对象或少了公式，再临时猜测来源。
 
 #### 3. 公式生成规则
 
 - 源 OfficeMath/OMML 使用官方 AxMath 转换宏 AMSMML2AM；从冻结来源核定的 TeX 以及正文数学目标使用官方 AMSTeX2AM。必须生成真实、可编辑的 AxMath OLE，禁止用斜体普通文字、Word 公式或图片代替。
+- OfficeMath 转换完成后先按第 1 节诊断，再按单字符工作流在当前工作稿中添加已登记的正文目标；诊断不支持把新增对象当作原始 OfficeMath 数量。若源稿只有 AxMath 和普通文字、无 OfficeMath，跳过 OfficeMath 批量转换及其数量诊断。混合 OfficeMath 和 AxMath 时现有 map-template 会拒绝，不能宣称自动处理完成。
 - 调用宏前先划清文字边界：中文说明、题号、题目标记等非数学内容先分离为普通 Word 文字，数学部分单独生成 AxMath。例如“求”和 *(2) 留在普通正文，不要塞进 OLE 再等终稿导出后补猜。
 - 源式为大积分时使用 \int，禁止生成 \smallint。normalize_axmath_tex.py 会把来源 TeX 中的 smallint 规范为 int；最终 AxMath 原始导出若仍出现 smallint，验收直接失败。
 - 下置极限统一使用 \underset{...}{\lim}；同时有上下限时使用 \underset{下标}{\lim}^{上标}。不要使用 \lim\limits 或 \nolimits：实机往返已确认 AxMath 导出可能规范化掉 limits，导致下置位置丢失。仅上置脚本可写成 \lim^{...}。limsup/liminf 不得误识别为 lim。
@@ -62,7 +63,7 @@ frozen_source.docx 是后续所有预检、公式目标清单和转换的唯一�
 生成后填写 SOURCE_FINAL_FORMULA_MAP.json：
 
 - source_formula：每个源对象记录一个或多个 final_ordinals；一源拆成多个终稿 OLE 合法。
-- source_formula_visual / added_body_math：每个目标必须有 source_anchor、expected_tex 和 final_ordinals。
+- source_formula_visual / added_body_math：每个目标必须有 source_anchor、expected_tex 和 final_ordinals；added_body_math 还须填写来源准确的 source_text。
 - final.path、final.sha256、final.axmath_count 必须对应最终候选 DOCX。
 - 每个源公式都必须有归属；每个终稿 AxMath 对象必须且只能归属一个目标。新增对象、拆分对象不得漏记。
 - 验收不再要求源公式总数与终稿 OLE 总数相等；由映射清单验证覆盖率，并按映射汇总核对结构、撇号、极限位置、运算符和对象数量。
@@ -71,19 +72,19 @@ frozen_source.docx 是后续所有预检、公式目标清单和转换的唯一�
 
 所有生成和定向修复完成后，对最终候选只做一次完整只读 -AllAxMath 导出。随后按交付限制二选一：
 
-- **只交付 Word**：运行 math_layout_contract.py validate 一次，命令必须带 --formula-map；来源本身已有 AxMath 时追加 --source-internal-audit。
+- **只交付 Word**：运行 math_layout_contract.py validate 一次，命令必须带 --formula-map；来源本身已有 AxMath 时追加 --source-internal-audit。有 added_body_math 时，按单字符文档运行一次 body_math_text_contract.py，核对对应位置和非目标文字。
 - **允许生成 PDF**：直接运行第 4 节 strict_final_compare.py 并带 --formula-map；它会调用同一映射门禁。不要再单独运行 math_layout_contract.py validate，避免重复验收。
 
 Word-only 命令：
 
-    python scripts\math_layout_contract.py validate --source "<READY 中的 frozen_source 绝对路径>" --final "final_candidate.docx" --internal-audit "<review>\FINAL_AXMATH_INTERNAL_TEX.json" --formula-map "<final-review>\SOURCE_FINAL_FORMULA_MAP.json" --out "<final-review>\MATH_LAYOUT_VALIDATION.json"
+    python scripts\math_layout_contract.py validate --source "<映射中的冻结来源绝对路径>" --final "final_candidate.docx" --internal-audit "<review>\FINAL_AXMATH_INTERNAL_TEX.json" --formula-map "<final-review>\SOURCE_FINAL_FORMULA_MAP.json" --out "<final-review>\MATH_LAYOUT_VALIDATION.json"
 
 验证必须 passed=true。最终同时确认：
 
 - 所有 AxMath OLE 均成功导出；无残留 OfficeMath、旧式公式编辑器或未知 OLE。
 - 题号是普通正文文字；目标段落无活动 w:numPr、编号域或 Heading 折叠身份。
 - 映射清单覆盖全部源公式和终稿对象；拆分、新增对象均有归属。
-- 正文标点报告的替换数量可追溯，普通正文中文句号残留数为 0；公式/OLE 内容未被全局替换。
+- 用户要求转换正文标点时，报告的替换数量可追溯且普通正文中文句号残留数为 0；否则核对来源标点保持不变。公式/OLE 内容未被全局替换。
 - 最后只做一次真实 Word 页面渲染和逐页验收。
 
 若验收发现问题，按对象序号或段落锚点定向修复；修复时只复核受影响对象，不重新做无证据的全书扫描。修复完成后对最终候选完成一次最终验收，不循环重复审计。strict_final_compare.py 也会调用同一公式映射门禁；需要该命令时传入 --formula-map，不要先单独 validate、再让 strict_final_compare 重复跑同一门禁。
@@ -104,7 +105,7 @@ python scripts\one_click_convert.py --input "<frozen_source.docx>" --inspect-onl
 python scripts\one_click_convert.py --input "<frozen_source.docx>"
 ```
 
-读取生成的 `READY_FOR_GPT_REVIEW.json`，选用其中的 `frozen_source` 和 `working_docx`。**不得**从旧聊天推断路径或跳过诊断。
+`--inspect-only` 只输出预检 JSON；正式转换后读取生成的 `READY_FOR_GPT_REVIEW.json`，单份输入选用 `documents[0].frozen_source` 和 `documents[0].working_docx`。先确认 READY 的冻结哈希与建图来源一致。**不得**从旧聊天推断路径或跳过诊断。仅有 AxMath 和正文文字、无 OfficeMath 时不运行本节批量转换/数量诊断。
 
 **转换后唯一正常诊断：**
 ```powershell
@@ -185,10 +186,11 @@ powershell -File scripts\inspect_axmath_tex.ps1 -InputDocx "<final.docx>" -AllAx
 **允许生成 PDF 时**，导出完整且无空内容/控制字符后：
 
 ```powershell
-python scripts\strict_final_compare.py --source "<READY 中的 frozen_source 绝对路径>" --final "<final.docx>" --outdir "<final-review>" --expected-source-sha256 "<frozen_sha>" --internal-audit "<final-review>\FINAL_AXMATH_INTERNAL_TEX.json" --formula-map "<final-review>\SOURCE_FINAL_FORMULA_MAP.json"
+python scripts\strict_final_compare.py --source "<映射中的冻结来源绝对路径>" --final "<final.docx>" --outdir "<final-review>" --expected-source-sha256 "<映射中的 source.sha256>" --internal-audit "<final-review>\FINAL_AXMATH_INTERNAL_TEX.json" --formula-map "<final-review>\SOURCE_FINAL_FORMULA_MAP.json"
 ```
 
 如果合法 `M2-B` 拆行，追加 `--repair-ledger "<verified-ledger.json>"`。转换、续跑、缓存恢复、诊断及最终比较必须使用同一 `--numbering-scope`；显式选择非默认值时每个阶段都须传入。
+来源已含 AxMath 时追加 `--source-internal-audit "<来源的完整内部导出.json>"`。
 
 最终比较必须重新打开 Word、逐页渲染源稿和结果、生成全部并排截图。**相同页码不等于相同内容**：公式重排可改变页数和页边界，必须按题号、正文短语、公式序号等内容锚点跨页追踪。GPT **实际查看源稿和结果稿每一页**，对小型行内公式放大或裁出足够清晰的局部视图；检查 AxMath 正文语义、撇号/集合符号、跨行、居中、边界、背景/边框、正文与分页差异，并在 `VISUAL_REVIEW.json` 写明跨页锚点和局部视图证据后：
 

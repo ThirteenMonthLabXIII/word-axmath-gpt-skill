@@ -32,6 +32,8 @@ jobs:
           python scripts/test_slim_pipeline.py
           python scripts/test_legacy_ole_gate.py
           python scripts/test_internal_content_gate.py
+          python scripts/test_math_layout_contract.py
+          python -m unittest discover -s scripts -p "test_body_math_text_contract.py" -v
           python -m unittest discover -s scripts -p "test_axmath_cli.py" -v
       - name: Parse PowerShell scripts
         shell: pwsh

@@ -201,6 +201,10 @@ def _semantic_tokens(tex: str) -> list[str]:
     value = value.replace("\\\\", " ")
     tokens: list[str] = []
     for token in re.findall(r"\\[A-Za-z]+|\\.|[A-Za-z]+|\d+|[^\s{}]", value):
+        if token == "$":
+            # AxMath exports inline TeX with $ delimiters; they are not math
+            # content. An escaped literal \\$ remains a separate token.
+            continue
         if token.startswith("\\"):
             name = token[1:]
             if name in _LAYOUT_COMMANDS:
@@ -451,6 +455,7 @@ def build_formula_map_template(source: Path, out: Path) -> dict:
                 "target_id": "BODY-001",
                 "kind": "added_body_math",
                 "source_anchor": "Paragraph/line and nearby ordinary text locating the variable or expression",
+                "source_text": "x",
                 "expected_tex": "x",
                 "final_ordinals": [],
             },
@@ -460,7 +465,7 @@ def build_formula_map_template(source: Path, out: Path) -> dict:
             "Add source_formula_visual targets for PDF/image formulas not represented as source OMML/AxMath, and added_body_math targets for every body variable/expression that must become an AxMath OLE.",
             "After generation, fill final.path, final.sha256, final.axmath_count and every target.final_ordinals.",
             "A source_formula may map to multiple final ordinals when split; every final AxMath ordinal must belong to exactly one target.",
-            "For visual-source and body-math targets, provide a precise source_anchor and source-derived expected_tex; keep surrounding Chinese instructions and question labels as ordinary Word text.",
+            "For body-math targets, record the exact source_text, source_anchor, and source-derived expected_tex; keep surrounding Chinese instructions and question labels as ordinary Word text.",
         ],
     }
     out = out.resolve()

@@ -3,79 +3,50 @@ name: word-axmath-conversion
 description: Handle math PDF/DOCX formatting, plain-text numbered exercises, non-collapsible headings, and genuine editable AxMath conversion through MinerU and Word.
 ---
 
-# AxMath 数学资料排版 Skill（唯一入口）
+# AxMath 数学资料排版
 
-**每次新任务先读本文件，再按下表选择对应文档；不要凭旧聊天猜工作流。**
+**每次新任务先读本文件**，再按任务读取下表中的文档。用户本次的范围、格式和文件保留要求优先；不要从旧聊天推测路径或处理方式。
 
+## 首轮生成硬规则
 
-## 首轮生成硬规则（强制，优先级高于下方通用流程）
+1. **冻结来源**：以用户指定的最新版为基础，在工作区创建不覆盖原件的冻结副本并记录 SHA-256；先清点题目、数学内容、图片与编号。默认保留来源标点；仅用户明确要求变更时，按 [转换工作流](docs/AXMATH_CONVERSION_WORKFLOW.md) 使用专用脚本，不全局替换公式或对象。
+2. **单个字母、数字不能漏**：逐题逐段识别正文中表达数学意义的独立字母、数字，包括已有公式前后的普通文字；每次出现均登记目标。`1. 设x=1，求x。` 的题号 `1.` 保留为普通文字，两个 `x` 和数值 `1` 分别是数学目标。不能仅靠一键转换、对象总数或最终审计发现遗漏。具体判断、命令和止损见 **[单字母/数字首轮处理](docs/BODY_SINGLE_CHARACTER_MATH.md)**。
+3. **先建完整映射**：生成前用 `math_layout_contract.py map-template` 创建 `SOURCE_FINAL_FORMULA_MAP.json`。逐项填写 `source_formula` 的 `source_anchor`、来源 `expected_tex`；补入 PDF/图片源公式 `source_formula_visual`，以及正文数学目标 `added_body_math`（含准确 `source_text`）。模板不会自动识别正文目标，`additional_target_examples` 不是已登记目标。
+4. **只用真实可编辑 AxMath**：已有 OfficeMath/OMML 用官方 `AMSMML2AM`，经来源核定的 TeX 和正文数学目标用官方 `AMSTeX2AM`。中文说明、题号和选项标签留作普通文字；完整数学表达式按原意处理，不逐字拆散。
+5. **题号与层级首轮正确**：题号直接写普通文字，保留原序号、标点和层级；禁止自动列表、编号域和 Heading 折叠身份。同级用制表位与悬挂缩进对齐，跨层级保留原有缩进差异。方法以 `docs/NUMBERING_AND_OUTLINE.md` 为准。
+6. **公式保真**：大积分用 `\int`，禁止 `\smallint`；下置极限用 `\underset{...}{\lim}`。撇号、结构、上下标和运算符按冻结来源确定，不从损坏对象猜原式。
+7. **一次生成，一次最终验收**：先确认目标、定位和代表样页，再按目标生成；完成后填写每个目标的终稿对象序号，所有对象恰好归属一次。最终候选只做一次完整内部 TeX 导出与一次真实 Word 逐页检查；发现问题按定位定向修复，不反复进行无证据的全书审计。
 
-> **所有规则在第一次写入新 DOCX 时落实。禁止先生成错误版，再靠终稿审计补救。**
-
-1. **先冻结来源**：原 PDF/DOCX 不覆盖；生成新的 frozen_source.docx 并记录 SHA-256。先清点题号、公式、图片和正文数学目标。
-2. **题号写普通文字**：保留原序号与层级；禁止自动编号、编号域和 Heading 折叠身份。用制表位 + 悬挂缩进对齐，保留各层级原有缩进差异。
-3. **先建公式目标映射**：生成前运行 math_layout_contract.py map-template 建立 SOURCE_FINAL_FORMULA_MAP.json；每个 source_formula 都要从冻结来源填写 source_anchor 和 expected_tex；PDF/图片中未成为 OMML 的公式列为 source_formula_visual；正文独立变量/表达式列为 added_body_math。
-4. **只生成真实 AxMath OLE**：源 OMML 使用官方 AMSMML2AM；源 TeX 和正文数学对象使用官方 AMSTeX2AM。宏调用前先把中文说明、题号/题目标记与数学片段分开；普通文字留在 Word，数学部分单独生成 OLE。
-5. **公式硬约束**：大积分用 \int，禁止 \smallint；下置极限用 \underset{...}{\lim}，禁止依赖 \lim\limits / \nolimits；撇号、结构和运算符按冻结来源保真。
-6. **标点只改正文文字**：用 normalize_body_punctuation.py 仅替换主文档正文普通 w:t 中的中文句号；不改公式、OLE、图表/图片、字段或页眉页脚。记录替换数量并确认普通正文残留为 0。
-7. **映射必须闭合**：每个源公式映射到一个或多个终稿 AxMath 对象；source_formula_visual 和 added_body_math 也必须有来源锚点、预期 TeX 和终稿对象序号。所有终稿对象恰好归属一次。
-8. **只做一轮最终验收**：完整导出 AxMath 内部 TeX，确认无 OfficeMath/未知 OLE、题号为普通文字、映射无遗漏、标点计数正确；随后做一次 Word 实际渲染和逐页验收。问题按定位定向修复，不重复全书审计。
-
-命令、清单字段和验收步骤以 docs/AXMATH_CONVERSION_WORKFLOW.md 的“首轮生成硬规则”为准；编号结构以 docs/NUMBERING_AND_OUTLINE.md 为准。
-
+## 按任务读取
 
 | 任务 | 必读文件 |
 |---|---|
-| 数学讲义、练习册、题目排版及分页留白 | `docs/MATH_LAYOUT_REFERENCE.md` + `docs/NUMBERING_AND_OUTLINE.md` |
-| 编号错位、Word 自动编号、WPS/Word 标题折叠 | **`docs/NUMBERING_AND_OUTLINE.md`（唯一权威）** |
+| 数学讲义、练习册、题图、分页留白 | `docs/MATH_LAYOUT_REFERENCE.md`、`docs/NUMBERING_AND_OUTLINE.md` |
+| 自动编号、层级错位、Word/WPS 折叠箭头 | `docs/NUMBERING_AND_OUTLINE.md` |
 | PDF → 可编辑 DOCX | `docs/MINERU_API.md` |
-| DOCX OfficeMath/OMML → 原生 AxMath | `docs/AXMATH_CONVERSION_WORKFLOW.md` |
-| Codex 在 Windows 本地直接操作 Word/AxMath | `docs/CODEX_DIRECT.md` |
-| `NEXT_ACTION.json` 指定异常类别 | `docs/REPAIR_REFERENCE.md` 对应类别（只在出现时读） |
+| 公式转换、源到终稿映射及验收 | `docs/AXMATH_CONVERSION_WORKFLOW.md` |
+| 正文独立字母或数字需要 AxMath | **`docs/BODY_SINGLE_CHARACTER_MATH.md`** |
+| Codex 在本机使用 Word/AxMath | `docs/CODEX_DIRECT.md` |
+| `NEXT_ACTION.json` 指定异常 | `docs/REPAIR_REFERENCE.md` 中对应类别 |
 
-## 1. 编号和层级：首次制作时落实
+## 执行顺序
 
-- **所有题号为直接输入的普通文字**，保留原题号、标点、跳号；禁止 Word 自动编号、多级列表和 `LISTNUM/SEQ/AUTONUM` 等题号字段。
-- **同级编号左缘对齐**，编号后正文和续行用统一制表位与悬挂缩进对齐；不同层级保持原稿本来的视觉缩进差异，不强行压成同一级。
-- **消除可折叠标题身份**：题目段落使用普通正文或自定义普通样式；不能只将 `w:outlineLvl` 设为 `9`。若原段落使用 `Heading 1/2` 等内置样式，必须克隆视觉格式到不含 Heading 身份的自定义样式，同步修改 `w:pStyle`、`basedOn`、`next`、`link`，并移除有效大纲级别。
-- **先样页，后全文**：样页在 Word/WPS 查看编号起点、续行和折叠箭头，合格后使用相同结构批量制作；不要终稿发现错误再逐题返工。
-- 编辑已有 DOCX 时，先读取 Word 实际显示的编号并物化为普通文字，然后解除自动列表。只在工作副本中修改 `word/document.xml`、`word/styles.xml` 等必要部分，不碰 AxMath OLE 和媒体。
+1. 明确本次需要转换还是只排版；仅排版时不要无故转换已有公式。用户只要 Word 或禁止导出 PDF 时，不生成交付或临时 PDF；在真实 Word 页面视图逐页验收。
+2. 按来源建立完整公式与正文目标清单，检查题号结构；用少量覆盖单字母、数字、已有公式及排版的样页验证后再制作全文。自动化报告仅辅助定位，不代替按来源判断哪些文字是数学内容。
+3. 存在 OfficeMath 时执行下列预检、转换和诊断。`--inspect-only` 只输出预检 JSON，**不会创建 READY 文件**；正式转换后读取 `READY_FOR_GPT_REVIEW.json` 的 `documents` 数组，对单份输入使用 `documents[0].frozen_source`、`documents[0].frozen_source_sha256` 和 `documents[0].working_docx`，确认冻结副本与建图来源哈希一致。诊断在新增正文对象之前执行，按 `NEXT_ACTION.json` 处理异常。
 
-**`--numbering-scope preserve` 只保留编号文字的标点，不能将自动编号转为普通文字，也不能消除折叠箭头。** 具体方法及验收只看 `docs/NUMBERING_AND_OUTLINE.md`。
+   ```powershell
+   python scripts\one_click_convert.py --input "<冻结来源.docx>" --inspect-only
+   python scripts\one_click_convert.py --input "<冻结来源.docx>"
+   python scripts\diagnose_after_conversion.py --source "<READY.documents[0].frozen_source>" --working "<READY.documents[0].working_docx>" --outdir "<review>"
+   ```
 
-## 2. 排版任务
+   已有运行目录使用 `--resume-run`；不要无故重头转换。若源稿仅有 AxMath 和普通文字，没有 OfficeMath，就以最新版工作副本直接处理正文目标，不运行 OfficeMath 数量诊断。
+4. 有正文单字母/数字目标时，按 `docs/BODY_SINGLE_CHARACTER_MATH.md` 的 `body_math.py inspect` → 核对并填写计划 → `body_math.py apply` 执行。计划与工作稿哈希绑定，位置必须由同段唯一上下文定位；输出的终稿对象序号写回映射。其他表达式和原图未识别内容按来源及主工作流处理，无法安全处理的目标要报告。
+5. 完整内部导出后，核对源到终稿映射、正文与公式语义，并逐页查看内容和排版。仅 Word 交付时按单字母/数字文档运行正文投影检查；允许 PDF 时，`strict_final_compare.py` 已包含该检查。若来源本身已有 AxMath，按主工作流先取得来源内部内容基线。
 
-先按 `docs/MATH_LAYOUT_REFERENCE.md` 确定内容、题目归属、公式、图注、留白、分页与交付格式。用户要求学生练习册时使用其中的同类兼职约定。所有公式默认使用真实可编辑的 AxMath；已有 OfficeMath 只读作为转换来源，不以图片、MathType 或新建 Word 公式冒充。仅排版时不无故启动 AxMath 转换。
+## MinerU 与运行边界
 
-用户只要 Word 或禁止导出 PDF 时，**不产生交付或临时 PDF**，在真实 Word 页面视图逐页验收。保留原 PDF / DOCX 与工作稿，不覆盖原件。
-
-## 3. PDF → DOCX：MinerU
-
-- **GPT 本机**：可直接调用本机 MinerU Precision API。
-- **Codex**：优先使用当前 Codex 对话侧边栏已登录的 MinerU 网页，无需 Token；预计排队超过 120 秒、连续 60 秒无进展或前端卡住时，立即改用本机 API，不继续傻等。
-- 两者功能权限一致，区别是使用优先级。API 只负责 PDF → DOCX，不影响后续 AxMath 转换方式。
-- 本机 API 命令：`python scripts\mineru_api.py parse --input "<原稿.pdf>" --outdir "<独立工作区>"`。
-- 两条路线统一冻结 `mineru_original.docx`，保留原始 ZIP、识别输出、任务状态和恢复记录；网络中断从已有任务恢复，不重复提交。
-- Token 存在本机忽略的 `secrets\mineru_token.txt`；不得输出、上传、写入 Git 或聊天内容。当前任务明确禁止使用 Token 时遵守。
-
-具体 API、状态码、断点与故障见 `docs/MINERU_API.md`。
-
-## 4. AxMath 公式转换主链（只有需要转换时执行）
-
-依次运行：
-
-    python scripts\one_click_convert.py --input "<原稿.docx>" --inspect-only
-    python scripts\one_click_convert.py --input "<原稿.docx>"
-    python scripts\diagnose_after_conversion.py --source "<frozen_source>" --working "<working_docx>" --outdir "<review>"
-
-通过 `READY_FOR_GPT_REVIEW.json` 读取真实路径；通过 `NEXT_ACTION.json` 选择后续修复或最终验收。已有运行目录用 `--resume-run` 恢复，禁止无故重头转换。官方 AxMath 宏与真实 OLE 可编辑性、每批保存/断点、公式结构及内部 TeX 门禁等全部严格遵照 `docs/AXMATH_CONVERSION_WORKFLOW.md`。
-
-Codex 使用本机终端和 Word/AxMath，不依赖网页电脑插件；详情见 `docs/CODEX_DIRECT.md`。
-
-## 5. 全局收口
-
-- 不覆盖原稿或已有完成稿；冻结来源 SHA-256；定向修改输出新 DOCX。
-- 不关闭或终止用户原有 Word/WPS；真实转换只用本任务确证的 Microsoft Word/AxMath。
-- 结构检查、内部公式验证和实际页面检查按任务做；**只做一次有价值的最终验收**，避免反复全面审计。
-- 不仅凭 `outlineLvl=9`、静态检查、页数/对象数相同宣称排版通过；用户要求 Word/WPS 表现时必须真实打开相应应用检查。
-- 每次完成后说明实际验证范围与未完成项。用户当前明确要求优先于历史默认值。
+- PDF → DOCX：Codex 优先使用当前对话侧边栏已登录的 MinerU 网页；预计排队超过 120 秒、连续 60 秒无进展或页面卡住时，改用本机 API：`python scripts\mineru_api.py parse --input "<原稿.pdf>" --outdir "<工作区>"`。保留 MinerU 原始输出；本机 Token 不得输出或提交。
+- Word/AxMath 操作使用本机独立任务进程，不关闭或终止用户原有 Word/WPS。宏批次、断点、异常处理和内部 TeX 门禁遵循 `docs/AXMATH_CONVERSION_WORKFLOW.md`；不全局修改 OLE 大小、预览或页面数量。
+- 用户要求仅保留最终版时，验收后按其指令清理本任务生成的中间交付物；保留明确要求保留的原件及用户已有文件。说明实际验证范围和未完成项。

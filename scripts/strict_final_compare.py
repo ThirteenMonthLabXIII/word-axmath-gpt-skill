@@ -8,6 +8,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 from audit_docx import compare as audit_docx_compare
+from body_math_text_contract import compare_body_math_text
 from build_source_tex_map import static_axmath_inventory
 from internal_content_audit import validate_full_internal_audit
 from math_layout_contract import validate_math_layout_contract
@@ -172,6 +173,15 @@ def compare(
     source_snapshot = snapshot(source_docx, outdir / "source", "source")
     final_snapshot = snapshot(final_docx, outdir / "final", "final")
     content_audit = audit_docx_compare(source_docx, final_docx, numbering_scope=numbering_scope)
+    map_data = json.loads(formula_map.read_text(encoding="utf-8-sig"))
+    has_body_targets = any(
+        isinstance(target, dict) and target.get("kind") == "added_body_math"
+        for target in map_data.get("targets") or []
+    )
+    body_text_contract = (
+        compare_body_math_text(source_docx, final_docx, formula_map)
+        if has_body_targets else None
+    )
     page_style = page_style_report(source_docx, final_docx)
 
     repair_ledger_report = None
@@ -249,6 +259,7 @@ def compare(
         "nonmath_text_contract_exact": bool(
             content_audit.get("nonmath_text_contract_exact")
         ),
+        "body_math_text_contract": body_text_contract,
         "repair_ledger": str(repair_ledger) if repair_ledger is not None else None,
         "repair_ledger_ok": repair_ledger_ok,
         "nonmath_text_diff_count": int(content_audit.get("nonmath_text_diff_count") or 0),
@@ -275,12 +286,14 @@ def compare(
         )
     )
     report["nonmath_text_contract_ok"] = bool(
-        report["nonmath_text_contract_exact"]
-        or (
-            repair_ledger_ok
-            and (
-                report["nonmath_text_flat_exact"]
-                or report["nonmath_text_numbering_normalized_flat_exact"]
+        body_text_contract["passed"] if has_body_targets else (
+            report["nonmath_text_contract_exact"]
+            or (
+                repair_ledger_ok
+                and (
+                    report["nonmath_text_flat_exact"]
+                    or report["nonmath_text_numbering_normalized_flat_exact"]
+                )
             )
         )
     )
