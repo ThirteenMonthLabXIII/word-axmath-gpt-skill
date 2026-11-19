@@ -20,7 +20,7 @@ Token 不得写入提示词、命令行参数、日志、Git、共享文件或�
 
 在相应电脑的 Skill 仓库根目录运行，也可从其他目录以 axmath.py 的绝对路径运行。以下尖括号仅为占位符，真实路径必须取自现场 JSON。
 
-先按 SKILL.md 和 AXMATH_CONVERSION_WORKFLOW.md 的首轮生成硬规则处理冻结来源：默认保留正文标点，只有明确要求转换句号时才用专用脚本；题号保持普通文字和原层级，公式目标映射必须在生成前建立。转换及后续核查默认 --numbering-scope preserve；不要用它代替题号普通文字检查。下列第 5、6 步只适用于允许生成 PDF 的任务：compare 会导出临时 PDF。仅交 Word 或禁止 PDF 时跳过这两条，使用 Word-only 公式映射验收和页面视图分支完成核查。
+先按 SKILL.md 和 AXMATH_CONVERSION_WORKFLOW.md 的首轮生成硬规则处理冻结来源：普通正文标点按来源保留，题号使用英文半角普通文字并保留原序号及逻辑关系；正文顶格、编号及相邻公式边界不加空格、四项分页选项关闭、题图与图号分别居中。按 [LAYOUT_RULES.md](LAYOUT_RULES.md) 在生成前检查标题、图和公式边界；`--numbering-scope preserve` 只表示转换链不动编号，不能代替这些排版检查。公式目标映射必须在生成前建立。下列第 5、6 步只适用于允许生成 PDF 的任务：compare 会导出临时 PDF。仅交 Word 或禁止 PDF 时跳过这两条，使用 Word-only 公式映射验收和页面视图分支完成核查。
 
     # 0. 原件保留；默认无覆盖复制为冻结副本
     [IO.File]::Copy("D:\任务\mineru_original.docx", "D:\任务\frozen_source.docx", $false)

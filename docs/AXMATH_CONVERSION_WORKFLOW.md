@@ -20,19 +20,20 @@
 
 #### 0. 冻结源稿与正文标点
 
-- 原 PDF/DOCX 永不覆盖。MinerU 输出先保存为 mineru_original.docx；已有 DOCX 也先保留原件。
-- 默认无覆盖复制一份 frozen_source.docx，保留来源标点。只有用户本次明确要求把正文中文句号改为英文句点时，才改用下面的专用脚本生成冻结副本。它只处理主文档正文普通 w:t 文本节点中的中文句号，不进入 AxMath OLE、OfficeMath、图片/图表、字段、文本框或页眉页脚；并验证 DOCX 中除 word/document.xml 外的其他包部件全部保持原样。
+- 原 PDF/DOCX 永不覆盖。MinerU 输出先保存为 mineru_original.docx；已有 DOCX 也先无覆盖备份并记录原始哈希。原始稿保留供题号、公式及正文核对。
+- 从原始稿制作排版工作副本：先盘点题号、题图、现有公式及待转成公式的正文数学内容，并记录真实显示的编号。按本技能要求处理已确认的编号结构、半角标点和空格，识别文字与现有或待生成的行内公式之间的边界空格，并登记变化；正文与公式的其他标点默认保留。分页选项、文字段落与题图的角色也在该阶段按规则准备。完成准备后再冻结为 frozen_source.docx，记录该副本的哈希并以它进入转换链；原始稿仍用于核对语义与编号。冻结后不要再改写该副本。
+- 只有用户本次明确要求把正文中文句号改为英文句点时，才对排版工作副本使用下面的专用脚本生成冻结副本。它只处理主文档正文普通 w:t 文本节点中的中文句号，不进入 AxMath OLE、OfficeMath、图片/图表、字段、文本框或页眉页脚；并验证 DOCX 中除 word/document.xml 外的其他包部件全部保持原样。
 - 执行标点转换时报告必须记录替换数量，且普通正文残留数为 0。禁止用 Word 全局查找替换或直接修改 OLE 内部。
 
-    python scripts\normalize_body_punctuation.py --source "mineru_original.docx" --output "frozen_source.docx" --report "review\BODY_PUNCTUATION.json"
+    python scripts\normalize_body_punctuation.py --source "format_prepared.docx" --output "frozen_source.docx" --report "review\BODY_PUNCTUATION.json"
 
 frozen_source.docx 是后续所有预检、公式目标清单和转换的唯一冻结来源；记录其 SHA-256。原件与 MinerU 原始结果继续保留。
 
 #### 1. 题号首轮写成普通文字
 
 - 生成前运行只读编号检查，并读取 Word 实际显示的题号；检查段落/样式继承链中的 w:numPr、w:numId、w:ilvl、numbering.xml、LISTNUM/SEQ/AUTONUM 字段、w:pStyle 和有效 w:outlineLvl。不得只凭缩进判断。
-- 题号直接写入正文文字，例如 1.、(1)、（1）；保留原序号、标点、跳号和层级。禁止自动编号、多级列表、编号域和 Heading 折叠身份。
-- 同级编号使用统一左缩进、悬挂缩进，并在编号后设置制表位；正文与续行从同一制表位对齐。保留不同层级原有缩进差异，不能只统一段落缩进。
+- 题号直接写入正文文字，例如 `1.题干`、`(1)小问`；保留原序号、跳号、星号和逻辑层级，编号数字、句点和括号采用英文半角。禁止自动编号、多级列表、编号域和 Heading 折叠身份。
+- 题文各级顶格，取消首行/悬挂缩进和编号用制表位，编号后不留空格；题图和图号居中。标题与所有其他段落的四项分页选项均关闭；文字与相邻公式之间不留空格。实施和门槛见 [LAYOUT_RULES.md](LAYOUT_RULES.md)。
 
     python scripts\inspect_question_numbering.py "frozen_source.docx"
 
@@ -207,7 +208,7 @@ python scripts\finalize_visual_review.py --report "<final-review>\STRICT_FINAL_C
 正常成功仅需 `SOURCE_STATE.json`（原稿预检和断点来源）、`READY_FOR_GPT_REVIEW.json`（**唯一转换交接状态**）、冻结源稿、可恢复转换工作稿、`.conversion-checkpoint.json`、`.skill-report.json` 和必要的 AxMath watcher 日志。
 
 - 没有可替换编号时，`working_docx` **直接指向转换工作稿**，不复制整份含 OLE 的 DOCX。
-- 转换及核查默认 `--numbering-scope preserve`：不自动改写题号标点，并按原样审计；也可显式传入以保持跨版本清晰。同类兼职练习册在排版稿上默认将单一数字主问题号显示为“数字 + 英文句点”，多段题号、原题数字和小问标点不变；用户要求原标点时按原样保留。再以排版稿冻结转换，仍选 `preserve`。显式选择 `line-start` 会将 `1、` **和 `（1）、`** 改为点号，只有符合任务要求时才能使用；`anywhere` 还会改变 `第1、2项`，必须明确选择。旧版运行目录续跑前检查其原编号策略，新版运行目录会拒绝与原策略不一致的续跑。
+- 转换及核查默认 `--numbering-scope preserve`，仅表示转换链本身不改编号，并不等于已满足排版要求。先在排版工作稿按 [NUMBERING_AND_OUTLINE.md](NUMBERING_AND_OUTLINE.md) 把已确认的编号写成英文半角普通文字、去掉编号后的空格，再冻结该稿进入转换链。`line-start` 只处理部分顿号，不能完成括号、列表物化或空格修复；`anywhere` 还可能改变 `第1、2项`，不得用它做全文替换。旧运行目录续跑前检查其原编号策略，所有阶段保持一致。
 - `normalize_numbering_punctuation.py` 只替换文本标点，不会把自动编号变为普通文字。题号应为普通文字时，先根据 Word 实际列表标签在工作副本逐题转成普通文本，再用 `python scripts/inspect_question_numbering.py "<docx>"` 排查直接或样式继承的列表、编号域及大纲标题，并在 Word 确认候选位置；脚本结果只供定位，不能代替逐题核实。
 - 正常成功不写多份内容重复的运行结果、控制状态和日志 JSON；失败时保留诊断与恢复证据。旧运行目录中的历史文件不主动删除。
 - 只有异常时才生成详细修复文件；无超宽公式不启动 Word 多行探针，无撇号风险不生成撇号审核表。

@@ -71,12 +71,16 @@ def test_skill_routes_and_contract() -> None:
     skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
     layout = (ROOT / "docs" / "MATH_LAYOUT_REFERENCE.md").read_text(encoding="utf-8")
     contract = (ROOT / "docs" / "NUMBERING_AND_OUTLINE.md").read_text(encoding="utf-8")
+    layout_rules = (ROOT / "docs" / "LAYOUT_RULES.md").read_text(encoding="utf-8")
     assert "docs/NUMBERING_AND_OUTLINE.md" in skill
+    assert "docs/LAYOUT_RULES.md" in skill
     assert "NUMBERING_AND_OUTLINE.md" in layout
     for phrase in (
         "普通文字",
-        "同级编号统一左缩进",
-        "保留不同层级原有的视觉缩进差异",
+        "英文半角",
+        "左边界",
+        "不留空格",
+        "题图和图号分别居中",
         "w:outlineLvl",
         "PlainTextStyle1",
         "basedOn",
@@ -85,6 +89,10 @@ def test_skill_routes_and_contract() -> None:
         "Word/WPS",
     ):
         assert phrase in contract, f"missing contract rule: {phrase}"
+    for stale in ("同级编号统一左缩进", "保留不同层级原有的视觉缩进差异"):
+        assert stale not in contract and stale not in skill
+    for property_name in ("widowControl", "keepNext", "keepLines", "pageBreakBefore"):
+        assert property_name in layout_rules
 
 
 def test_inspector_detects_heading_identity_even_with_outline_nine() -> None:
