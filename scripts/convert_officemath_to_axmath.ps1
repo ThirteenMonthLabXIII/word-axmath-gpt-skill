@@ -50,6 +50,7 @@ $result=[ordered]@{
   success=$false
   complete=$false
   batches=@()
+  control_write_retries=0
   word_forced_cleanup=$false
 }
 $total=[Diagnostics.Stopwatch]::StartNew()
@@ -61,11 +62,13 @@ $beforeDumps=@()
 $knownDumps=@()
 $wordPid=$null
 $wordPidOwned=$false
+$candidateWordPidValid=$false
 $normalWasSaved=$null
 $checkpointPath=$OutputFull+'.conversion-checkpoint.json'
 $sourceSha=$null
 $resumeState=$null
 $wordCreationUnix=$null
+$wordStartTicks=$null
 
 function Get-SharedSha256 {
   param([string]$Path)
@@ -75,6 +78,15 @@ function Get-SharedSha256 {
     try { return ([BitConverter]::ToString($hash.ComputeHash($stream))).Replace('-','').ToLowerInvariant() }
     finally { $hash.Dispose() }
   } finally { $stream.Dispose() }
+}
+
+function Test-TaskWordIdentity {
+  param([int]$TaskPid,[long]$StartTicks)
+  if($TaskPid -le 0 -or $StartTicks -le 0){return $false}
+  $process=Get-Process -Id $TaskPid -ErrorAction SilentlyContinue
+  if($null -eq $process){return $false}
+  try { return ($process.ProcessName -eq 'WINWORD' -and $process.StartTime.ToUniversalTime().Ticks -eq $StartTicks) }
+  catch { return $false }
 }
 
 function Write-ConversionCheckpoint {
@@ -130,7 +142,19 @@ function Write-ControlState {
     updated_at=(Get-Date).ToString('o')
   }
   $json=$state|ConvertTo-Json -Depth 4
-  Set-Content -LiteralPath $ControlPath -Value $json -Encoding UTF8
+  # The dialog watcher may briefly hold the state file while reading it. A
+  # sharing violation after a successful checkpoint should not abort the next
+  # conversion batch; fail closed if the collision persists.
+  for($attempt=0;$attempt -lt 30;$attempt++){
+    try {
+      Set-Content -LiteralPath $ControlPath -Value $json -Encoding UTF8
+      break
+    } catch [System.IO.IOException] {
+      $result.control_write_retries=[int]$result.control_write_retries+1
+      if($attempt -eq 29){throw}
+      Start-Sleep -Milliseconds 100
+    }
+  }
 }
 
 try {
@@ -190,38 +214,65 @@ public static class WordPidNative {
 }
 '@ -ErrorAction SilentlyContinue
 
+  $wordSpawnedAt=Get-Date
   $word=New-Object -ComObject Word.Application
 
-  # Establish ownership before changing application options or opening a
-  # document. Pre-existing user Word processes are allowed, but this task must
-  # prove that its COM object belongs to a distinct WINWORD process.
-  Start-Sleep -Milliseconds 250
-  $newWord=@(
-    Get-Process WINWORD -ErrorAction SilentlyContinue |
-    Where-Object { $existingWord -notcontains $_.Id } |
-    Select-Object -ExpandProperty Id
-  )
+  # Identify a distinct automation-process candidate before opening the task
+  # document; its window PID must then match before any application settings
+  # or AxMath macros are changed.
+  # Ignore unrelated interactive Word windows launched at the same time.
+  # A fresh COM instance on this machine starts as /Automation -Embedding.
+  $newWord=@()
+  for($attempt=0;$attempt -lt 8;$attempt++){
+    $newWord=@(
+      Get-CimInstance Win32_Process -Filter "Name='WINWORD.EXE'" |
+      Where-Object {
+        $existingWord -notcontains [int]$_.ProcessId -and
+        $_.CommandLine -match '(^|\s)/Automation(\s|$)' -and
+        $_.CommandLine -match '-Embedding' -and
+        $_.CreationDate -ge $wordSpawnedAt.AddSeconds(-2)
+      } |
+      ForEach-Object { [int]$_.ProcessId }
+    )
+    if($newWord.Count -gt 0){break}
+    Start-Sleep -Milliseconds 250
+  }
   if($newWord.Count -eq 1){
     $wordPid=[int]$newWord[0]
-    $wordPidOwned=$true
+    $candidateWordPidValid=$true
     $result.word_pid=$wordPid
-    $result.word_pid_owned=$true
+    $result.word_pid_owned=$false
   } else {
     try {
       [uint32]$pidValue=0
       [void][WordPidNative]::GetWindowThreadProcessId([IntPtr]$word.Hwnd,[ref]$pidValue)
       if($pidValue -gt 0){
         $wordPid=[int]$pidValue
-        $wordPidOwned=($existingWord -notcontains $wordPid)
+        $candidateWordPidValid=($newWord -contains $wordPid)
         $result.word_pid=$wordPid
-        $result.word_pid_owned=$wordPidOwned
+        $result.word_pid_owned=$false
       }
     } catch {}
   }
-  if(-not $wordPidOwned){
+  if(-not $candidateWordPidValid){
     throw "Could not establish an isolated task-owned Word process; pre-existing Word processes were left untouched."
   }
-  $wordCreationUnix=[DateTimeOffset]::new((Get-Process -Id $wordPid).StartTime.ToUniversalTime()).ToUnixTimeSeconds()
+  $wordStarted=(Get-Process -Id $wordPid).StartTime.ToUniversalTime()
+  $wordStartTicks=$wordStarted.Ticks
+  $wordCreationUnix=[DateTimeOffset]::new($wordStarted).ToUnixTimeSeconds()
+
+  # Confirm that the opened task document actually belongs to the candidate
+  # process before changing Word options, loading AxMath or running a macro.
+  $doc=$word.Documents.Open($OutputDocx)
+  [uint32]$documentPid=0
+  $window=[IntPtr]([int64]$doc.ActiveWindow.Hwnd)
+  [void][WordPidNative]::GetWindowThreadProcessId($window,[ref]$documentPid)
+  if([int]$documentPid -ne $wordPid){
+    throw 'Task document window did not belong to the isolated Word process.'
+  }
+  $wordPidOwned=$true
+  $result.word_pid_owned=$true
+  $result.word_window_pid_verified=$true
 
   $word.Visible=$false
   $word.DisplayAlerts=0
@@ -241,7 +292,6 @@ public static class WordPidNative {
   $addin=$null
   if(-not $found){$word.AddIns.Add($TemplatePath,$true)|Out-Null}
 
-  $doc=$word.Documents.Open($OutputDocx)
   $doc.Activate()
   $result.before_omath=$doc.OMaths.Count
   $result.before_inline_shapes=$doc.InlineShapes.Count
@@ -344,13 +394,17 @@ finally {
   }
 
   if($word -ne $null -and $wordPidOwned){
-    try{
-      if($normalWasSaved -eq $true -and -not [bool]$word.NormalTemplate.Saved){
-        $word.NormalTemplate.Saved=$true
-      }
-    }catch{}
-    try{$word.DisplayAlerts=0}catch{}
-    try{$word.Quit()}catch{$result.word_quit_error=$_.Exception.Message}
+    if(Test-TaskWordIdentity -TaskPid $wordPid -StartTicks $wordStartTicks){
+      try{
+        if($normalWasSaved -eq $true -and -not [bool]$word.NormalTemplate.Saved){
+          $word.NormalTemplate.Saved=$true
+        }
+      }catch{}
+      try{$word.DisplayAlerts=0}catch{}
+      try{$word.Quit()}catch{$result.word_quit_error=$_.Exception.Message}
+    }else{
+      $result.word_quit_skipped_identity_changed=$true
+    }
   } elseif($word -ne $null) {
     # Never call Quit() on a COM object whose process ownership could not be
     # proven; it may belong to a user's pre-existing Word session.
@@ -370,10 +424,10 @@ finally {
 
   if($wordPid -and $wordPidOwned){
     $deadline=(Get-Date).AddSeconds(6)
-    while((Get-Date) -lt $deadline -and (Get-Process -Id $wordPid -ErrorAction SilentlyContinue)){
+    while((Get-Date) -lt $deadline -and (Test-TaskWordIdentity -TaskPid $wordPid -StartTicks $wordStartTicks)){
       Start-Sleep -Milliseconds 250
     }
-    if(Get-Process -Id $wordPid -ErrorAction SilentlyContinue){
+    if(Test-TaskWordIdentity -TaskPid $wordPid -StartTicks $wordStartTicks){
       try{
         Stop-Process -Id $wordPid -Force -ErrorAction Stop
         $result.word_forced_cleanup=$true

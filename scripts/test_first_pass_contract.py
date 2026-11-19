@@ -8,6 +8,7 @@ def main() -> int:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     workflow = (ROOT / "docs" / "AXMATH_CONVERSION_WORKFLOW.md").read_text(encoding="utf-8")
     numbering = (ROOT / "docs" / "NUMBERING_AND_OUTLINE.md").read_text(encoding="utf-8")
+    layout = (ROOT / "docs" / "LAYOUT_RULES.md").read_text(encoding="utf-8")
     contract = (ROOT / "scripts" / "math_layout_contract.py").read_text(encoding="utf-8")
     compare = (ROOT / "scripts" / "strict_final_compare.py").read_text(encoding="utf-8")
     cli = (ROOT / "axmath.py").read_text(encoding="utf-8")
@@ -22,8 +23,10 @@ def main() -> int:
         assert "\\underset" in text
         assert "\\smallint" in text
 
-    for token in ("w:numPr", "w:numId", "w:ilvl", "LISTNUM", "SEQ", "AUTONUM", "w:outlineLvl", "悬挂缩进", "制表位"):
+    for token in ("w:numPr", "w:numId", "w:ilvl", "LISTNUM", "SEQ", "AUTONUM", "w:outlineLvl", "悬挂", "制表位", "左边界", "不留空格"):
         assert token in numbering, token
+    for token in ("widowControl", "keepNext", "keepLines", "pageBreakBefore", "图号", "题图"):
+        assert token in layout, token
 
     for token in (
         "FORMULA_MAP_SCHEMA",
@@ -45,7 +48,7 @@ def main() -> int:
     assert "smallint_forbidden" in powershell
     assert "lim_subscript_requires_underset" in powershell
 
-    active_docs = [skill, readme, workflow, numbering]
+    active_docs = [skill, readme, workflow, numbering, layout]
     for text in active_docs:
         assert "\u200b" not in text and "\u200c" not in text and "\ufeff" not in text
 

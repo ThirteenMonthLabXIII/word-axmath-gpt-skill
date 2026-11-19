@@ -47,16 +47,19 @@ FORMULA_MAP_SCHEMA = "axmath-source-final-map/v1"
 _FRACTION_RE = re.compile(r"\\(?:dfrac|tfrac|cfrac|frac|binom)\b|\\over\b")
 _RADICAL_RE = re.compile(r"\\sqrt\b")
 _MATRIX_RE = re.compile(
-    r"\\begin\s*\{(?:smallmatrix|[pbBvV]?matrix|array)\}|\\matrix\b"
+    r"\\begin\s*\{(?:smallmatrix|[pbBvV]?matrix)\}|\\matrix\b"
 )
 _EQUATION_ARRAY_RE = re.compile(
-    r"\\begin\s*\{(?:cases|dcases|rcases|aligned|alignedat|array)\}"
+    r"\\begin\s*\{(?:cases|dcases|rcases|aligned|alignedat)\}"
 )
+_GENERIC_ARRAY_RE = re.compile(r"\\begin\s*\{array\}")
 _SUBSCRIPT_RE = re.compile(r"(?<!\\)_(?:\{[^{}]*\}|[A-Za-z0-9])")
-_SUPERSCRIPT_RE = re.compile(r"(?<!\\)\^(?:\{[^{}]*\}|[A-Za-z0-9])")
+_SUPERSCRIPT_RE = re.compile(r"(?<!\\)\^(?=\{|[A-Za-z0-9])")
+_DEGREE_SUPERSCRIPT_RE = re.compile(r"(?<!\\)\^\s*\{\s*(?:\\(?:circ|degree)|[°∘])\s*\}")
+_STANDALONE_DEGREE_RE = re.compile(r"\\degree(?![A-Za-z])|°")
 _UNDERSCRIPT_RE = re.compile(r"\\underset\s*\{")
 _SUBSUP_RE = re.compile(
-    r"_(?:\{[^{}]*\}|[A-Za-z0-9])\s*\^(?:\{[^{}]*\}|[A-Za-z0-9])"
+    r"_(?:\{[^{}]*\}|[A-Za-z0-9])\s*\^(?=\{|[A-Za-z0-9])"
 )
 _RELATION_TEX_PATTERNS = {
     "le": re.compile(r"\\(?:le|leq|leqslant)(?![A-Za-z])|≤"),
@@ -107,6 +110,8 @@ def _tex_structure_signature(tex: str) -> dict:
     }
     subscripts = len(_SUBSCRIPT_RE.findall(value)) + len(_UNDERSCRIPT_RE.findall(value))
     superscripts = len(_SUPERSCRIPT_RE.findall(value))
+    degree_superscripts = len(_DEGREE_SUPERSCRIPT_RE.findall(value))
+    standalone_degrees = len(_STANDALONE_DEGREE_RE.findall(_DEGREE_SUPERSCRIPT_RE.sub(" ", value)))
     lim_pairs = sum(
         1 for directions in limit_operator_placements(value)
         if "below" in directions and "above" in directions
@@ -116,8 +121,11 @@ def _tex_structure_signature(tex: str) -> dict:
         "radicals": len(_RADICAL_RE.findall(value)),
         "matrices": len(_MATRIX_RE.findall(value)),
         "equation_arrays": len(_EQUATION_ARRAY_RE.findall(value)),
+        "generic_arrays": len(_GENERIC_ARRAY_RE.findall(value)),
         "subscripts": subscripts,
         "superscripts": superscripts,
+        "degree_superscripts": degree_superscripts,
+        "standalone_degrees": standalone_degrees,
         "subsuperscripts": len(_SUBSUP_RE.findall(value)) + lim_pairs,
         "relations": relations,
         "operators": operators,
@@ -172,10 +180,13 @@ _SEMANTIC_REPLACEMENTS = [
     (r"\neq", "≠"), (r"\ne", "≠"), (r"\to", "→"),
     (r"\pm", "±"), (r"\mp", "∓"), (r"\times", "×"),
     (r"\div", "÷"), (r"\cdot", "·"), (r"\in", "∈"),
+    (r"\degree", "°"),
     (r"\lvert", "|"), (r"\rvert", "|"), (r"\vert", "|"),
     (r"\lVert", "‖"), (r"\rVert", "‖"), (r"\Vert", "‖"),
     (r"\langle", "⟨"), (r"\rangle", "⟩"),
-    (r"\prime", " PRIME "), ("′", " PRIME "),
+    # U+0001 cannot occur in valid source XML or a passing internal audit.
+    # It prevents the prime marker from colliding with literal letters PRIME.
+    (r"\prime", "\x01"), ("′", "\x01"),
 ]
 _GREEK_CANONICAL = {
     r"\alpha": "α", r"\beta": "β", r"\gamma": "γ", r"\delta": "δ",
@@ -192,22 +203,36 @@ _GREEK_CANONICAL = {
 
 
 def _semantic_tokens(tex: str) -> list[str]:
-    value = normalize_axmath_tex(str(tex or ""))
+    value = normalize_axmath_tex(str(tex or "")).replace("\u200b", "")
+    # OMML writes a degree as an empty-base superscript circ; AxMath emits
+    # the equivalent degree command. Bare TeX tildes are spacing here.
+    value = re.sub(r"(?<!\\)\^\s*\{\s*\\(?:circ|degree)\s*\}", "°", value)
+    value = re.sub(r"(?<!\\)~", " ", value)
+    # Column alignment in an array is layout metadata, not a math variable.
+    value = re.sub(r"\\begin\s*\{array\}\s*\{[^{}]*\}", " ", value)
     value = re.sub(r"\\(?:begin|end)\s*\{[^{}]*\}", " ", value)
     for command, canonical in _SEMANTIC_REPLACEMENTS:
-        value = value.replace(command, canonical)
+        value = re.sub(re.escape(command) + r"(?![A-Za-z])", lambda _: canonical, value)
     for command, canonical in _GREEK_CANONICAL.items():
-        value = value.replace(command, canonical)
+        value = re.sub(re.escape(command) + r"(?![A-Za-z])", lambda _: canonical, value)
+    # Source OMML may spell elementary functions as letters while AxMath
+    # exports the corresponding TeX operator. Preserve the same letters
+    # in the semantic stream, without matching command-name prefixes.
+    value = re.sub(r"\\(arcsin|arccos|arctan|sinh|cosh|tanh|sin|cos|tan|cot|sec|csc|log|ln|exp|min|max)(?![A-Za-z])", lambda m: m.group(1), value)
     value = value.replace("\\\\", " ")
     tokens: list[str] = []
-    for token in re.findall(r"\\[A-Za-z]+|\\.|[A-Za-z]+|\d+|[^\s{}]", value):
+    for token in re.findall(r"\\[A-Za-z]+|\\.|[A-Za-z]|\d+|[^\s{}]", value):
         if token == "$":
             # AxMath exports inline TeX with $ delimiters; they are not math
             # content. An escaped literal \\$ remains a separate token.
             continue
-        if token.startswith("\\"):
+        if token == "\x01":
+            tokens.append("<PRIME>")
+        elif token.startswith("\\"):
             name = token[1:]
-            if name in _LAYOUT_COMMANDS:
+            # AxMath emits TeX spacing controls around ordinary math, e.g.
+            # sin\!\:x and \int x\,dx. They do not add punctuation tokens.
+            if name in _LAYOUT_COMMANDS or name in {",", ":", ";", "!", " "}:
                 continue
             tokens.append(name)
         else:
@@ -219,12 +244,19 @@ def _structure_defects(expected: dict, tex: str, *, exact: bool = False) -> list
     actual = _tex_structure_signature(tex)
     defects: list[dict] = []
     numeric_keys = (
-        "fractions", "radicals", "matrices", "equation_arrays",
+        "fractions", "radicals",
         "subscripts", "superscripts", "subsuperscripts",
     )
     for key in numeric_keys:
         want = int(expected.get(key) or 0)
         got = int(actual.get(key) or 0)
+        if key == "superscripts":
+            # AxMath's standalone degree symbol already sits at superscript
+            # height. Accept it for a source superscript circle without also
+            # hiding missing ordinary exponents.
+            expected_degrees = min(want, int(expected.get("degree_superscripts") or 0))
+            missing_degree_scripts = max(0, expected_degrees - actual["degree_superscripts"])
+            got += min(missing_degree_scripts, actual["standalone_degrees"])
         if (exact and got != want) or (not exact and got < want):
             defects.append({
                 "reason": f"{key}_structure_count_mismatch" if exact else f"{key}_structure_missing",
@@ -232,6 +264,31 @@ def _structure_defects(expected: dict, tex: str, *, exact: bool = False) -> list
                 "expected_at_least": None if exact else want,
                 "actual": got,
             })
+    expected_degrees = int(expected.get("degree_superscripts") or 0)
+    actual_degrees = actual["degree_superscripts"] + actual["standalone_degrees"]
+    if actual_degrees < expected_degrees:
+        defects.append({"reason": "degree_marker_structure_missing",
+                        "expected_at_least": expected_degrees, "actual": actual_degrees})
+    # TeX's generic array environment is used by AxMath for both OMML
+    # matrices and equation arrays. Count each environment once and require a
+    # compatible assignment, instead of counting it as both structures.
+    want_m = int(expected.get("matrices") or 0)
+    want_e = int(expected.get("equation_arrays") or 0)
+    want_g = int(expected.get("generic_arrays") or 0)
+    got_m = int(actual.get("matrices") or 0)
+    got_e = int(actual.get("equation_arrays") or 0)
+    got_g = int(actual.get("generic_arrays") or 0)
+    want_total, got_total = want_m + want_e + want_g, got_m + got_e + got_g
+    compatible = (got_m <= want_m + want_g and got_e <= want_e + want_g
+                  and want_m <= got_m + got_g and want_e <= got_e + got_g)
+    if (exact and (want_total != got_total or not compatible)) or (
+        not exact and (got_total < want_total or max(0, want_m - got_m) + max(0, want_e - got_e) > got_g)
+    ):
+        defects.append({
+            "reason": "matrix_or_equation_array_structure_mismatch",
+            "expected": {"matrices": want_m, "equation_arrays": want_e, "generic_arrays": want_g},
+            "actual": {"matrices": got_m, "equation_arrays": got_e, "generic_arrays": got_g},
+        })
     for field in ("relations", "operators"):
         expected_counts = expected.get(field) or {}
         actual_counts = actual.get(field) or {}

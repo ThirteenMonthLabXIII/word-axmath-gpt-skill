@@ -13,7 +13,7 @@ from collections import Counter
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from normalize_axmath_tex import contains_prime_or_derivative_marker
+from normalize_axmath_tex import PRIME_SOURCE_MARKERS, contains_prime_or_derivative_marker
 
 NS = {
     "m": "http://schemas.openxmlformats.org/officeDocument/2006/math",
@@ -21,11 +21,11 @@ NS = {
 }
 M = "{" + NS["m"] + "}"
 SET_TOKENS = set("∪∩⊂⊆⊃⊇∈∉∅∖⋃⋂")
-_PRIME_RUN_RE = re.compile(r"'{1,3}|[′ʹ’‘]|[″ʺ]|‴")
+_PRIME_RUN_RE = re.compile(r"'+|′+|ʹ+|’+|‘+|[″ʺ]|‴|⁗")
 _RELATION_SYMBOLS = {
     "≤": "le", "≥": "ge", "≠": "ne", "<": "lt", ">": "gt", "=": "eq",
     "+": "plus", "−": "minus", "-": "minus", "±": "pm", "∓": "mp",
-    "×": "times", "÷": "divide", "·": "cdot",
+    "×": "times", "÷": "divide", "·": "cdot", "⋅": "cdot",
 }
 _OPERATOR_SYMBOLS = {
     "∫": "integral", "∬": "double_integral", "∭": "triple_integral", "∮": "contour_integral",
@@ -42,6 +42,12 @@ def _math_text(node: ET.Element | None) -> str:
     return "".join((item.text or "") for item in node.findall(".//m:t", NS))
 
 
+def _omml_hide_enabled(node: ET.Element | None) -> bool:
+    if node is None:
+        return False
+    return node.get(M + "val", "1").strip().lower() not in {"0", "false", "off"}
+
+
 def _source_prime_orders(text: str) -> list[int]:
     orders: list[int] = []
     for match in _PRIME_RUN_RE.finditer(text):
@@ -52,6 +58,8 @@ def _source_prime_orders(text: str) -> list[int]:
             orders.append(2)
         elif token == "‴":
             orders.append(3)
+        elif token == "⁗":
+            orders.append(4)
         else:
             orders.append(len(token))
     return orders
@@ -114,7 +122,33 @@ def _formula_structure_candidate(formula: ET.Element, ordinal: int, inspected: s
         end = props.find("m:endChr", NS)
         begin_value = begin.get(M + "val") if begin is not None else None
         end_value = end.get(M + "val") if end is not None else None
-        delimiters.append({"begin": begin_value or "(", "end": end_value or ")"})
+        # An explicitly empty OMML delimiter is intentional (e.g. an open
+        # brace for a system of equations); only an absent value gets a default.
+        delimiters.append({
+            "begin": "(" if begin_value is None else begin_value,
+            "end": ")" if end_value is None else end_value,
+        })
+
+    # OMML n-ary limits use m:sub / m:sup rather than sSub / sSup.
+    # Count only nonempty visible limit content; an empty slot is not a script.
+    nary_sub = nary_sup = nary_pair = 0
+    for nary in formula.iter(M + "nary"):
+        props = nary.find("m:naryPr", NS)
+        sub_hide = props.find("m:subHide", NS) if props is not None else None
+        sup_hide = props.find("m:supHide", NS) if props is not None else None
+        has_sub = bool(_math_text(nary.find("m:sub", NS)).strip()) and not _omml_hide_enabled(sub_hide)
+        has_sup = bool(_math_text(nary.find("m:sup", NS)).strip()) and not _omml_hide_enabled(sup_hide)
+        nary_sub += int(has_sub)
+        nary_sup += int(has_sup)
+        nary_pair += int(has_sub and has_sup)
+
+    # Word often represents a degree mark as a superscript circle, while
+    # AxMath exports the same visually raised mark as a standalone \degree.
+    degree_superscripts = sum(
+        1 for node in formula.iter()
+        if node.tag in {M + "sSup", M + "sSubSup"}
+        and _math_text(node.find("m:sup", NS)).strip() in {"°", "∘"}
+    )
 
     signature = {
         "fractions": node_counts["f"],
@@ -122,9 +156,10 @@ def _formula_structure_candidate(formula: ET.Element, ordinal: int, inspected: s
         "matrices": node_counts["m"],
         "equation_arrays": node_counts["eqArr"],
         "delimiters": delimiters,
-        "subscripts": node_counts["sSub"] + node_counts["limLow"] + node_counts["sSubSup"],
-        "superscripts": node_counts["sSup"] + node_counts["limUpp"] + node_counts["sSubSup"],
-        "subsuperscripts": node_counts["sSubSup"],
+        "subscripts": node_counts["sSub"] + node_counts["limLow"] + node_counts["sSubSup"] + nary_sub,
+        "superscripts": node_counts["sSup"] + node_counts["limUpp"] + node_counts["sSubSup"] + nary_sup,
+        "degree_superscripts": degree_superscripts,
+        "subsuperscripts": node_counts["sSubSup"] + nary_pair,
         "relations": dict(sorted(relation_counts.items())),
         "operators": dict(sorted(operator_counts.items())),
     }
@@ -156,6 +191,12 @@ def scan_source_math(path: Path) -> dict:
             for node in formula.iter()
             if node.tag == M + "chr"
         ]
+        # OMML n-ary operators default to U+222B when naryPr/chr is omitted;
+        # Word commonly omits the explicit integral character on save.
+        for nary in formula.iter(M + "nary"):
+            props = nary.find("m:naryPr", NS)
+            if props is None or props.find("m:chr", NS) is None:
+                chars.append("∫")
         inspected = text + "".join(chars)
         limits.extend(_limit_script_candidates(formula, ordinal))
         structure = _formula_structure_candidate(formula, ordinal, inspected)
@@ -165,7 +206,7 @@ def scan_source_math(path: Path) -> dict:
             primes.append({
                 "ordinal": ordinal,
                 "source_text": text[:180],
-                "prime_symbols": sorted({c for c in inspected if c in "'′″‴⁗’ʹʺ"}),
+                "prime_symbols": sorted({c for c in inspected if c in PRIME_SOURCE_MARKERS}),
                 "prime_orders": _source_prime_orders(inspected),
                 "reason": "source_prime_semantics_require_axmath_contract_review",
             })
